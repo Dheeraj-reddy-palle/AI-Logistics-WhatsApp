@@ -635,22 +635,53 @@ async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict
     
     # Generate 6-digit OTP
     otp = str(random.randint(100000, 999999))
-    
     logger.info(f"[{phone}] Generated OTP {otp} for mobile {mobile}")
     
+    # Try sending real SMS via Twilio
+    sms_sent = False
+    if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN and settings.TWILIO_SMS_NUMBER:
+        try:
+            from twilio.rest import Client
+            twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+            
+            # Format number to E.164 (India code)
+            e164_mobile = f"+91{mobile}"
+            
+            message = twilio_client.messages.create(
+                body=f"Your Logistics AI booked cab OTP is: {otp}. Do not share this with anyone.",
+                from_=settings.TWILIO_SMS_NUMBER,
+                to=e164_mobile
+            )
+            logger.info(f"[{phone}] SMS OTP sent to {e164_mobile}, SID: {message.sid}")
+            sms_sent = True
+        except Exception as e:
+            logger.error(f"[{phone}] Failed to send SMS OTP: {e}")
+    else:
+        logger.warning(f"[{phone}] Twilio SMS credentials missing. SMS skipped.")
+
     await state_manager.update_state(phone, "collecting_otp", {
         "customer_mobile": mobile,
         "otp": otp,
         "otp_attempts": 0,
     })
     
-    return {
-        "reply": (
+    # In local dev without Twilio configured, we still print it to the reply for testing
+    if not sms_sent and not settings.TWILIO_SMS_NUMBER:
+        reply_msg = (
             f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-            f"🔐 Your OTP is: **{otp}**\n"
-            "(In production, this would be sent via SMS)\n\n"
+            f"🔐 [DEV MODE] Your OTP is: **{otp}**\n"
+            "(SMS features require Twilio setup in .env)\n\n"
             "Please enter the OTP to verify and complete your booking:"
-        ),
+        )
+    else:
+        reply_msg = (
+            f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
+            f"📲 An OTP has been sent via SMS to your mobile number.\n\n"
+            "Please enter the OTP to verify and complete your booking:"
+        )
+    
+    return {
+        "reply": reply_msg,
         "state": "collecting_otp",
         "booking_id": None,
     }

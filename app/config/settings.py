@@ -32,6 +32,7 @@ class Settings(BaseSettings):
     TWILIO_ACCOUNT_SID: Optional[str] = ""
     TWILIO_AUTH_TOKEN: Optional[str] = ""
     TWILIO_WHATSAPP_NUMBER: Optional[str] = "whatsapp:+14155238886"
+    TWILIO_SMS_NUMBER: Optional[str] = ""
 
     # Monitoring (optional)
     SENTRY_DSN: Optional[str] = ""
