@@ -1,8 +1,12 @@
 import re
 import math
 import httpx
+import urllib.parse
 from typing import Optional
 from dataclasses import dataclass
+import logging
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -66,29 +70,81 @@ MAPS_AT_PATTERN = re.compile(
     r'@(-?\d+\.?\d*),(-?\d+\.?\d*)'
 )
 
+# Plus Code pattern (e.g., F9C7+3HV, 8FVC9G+Q2)
+# After URL decoding, + becomes space, so match both: F9C7+3HV or F9C7 3HV
+PLUS_CODE_PATTERN = re.compile(r'^[23456789CFGHJMPQRVWX]{4,8}[+\s][23456789CFGHJMPQRVWX]{2,4}\s*')
+
+
+def _clean_maps_address(raw_address: str) -> str:
+    """Clean a Google Maps address for geocoding.
+    Strips Plus Codes, postal codes, and other noise that breaks Nominatim."""
+    text = raw_address.strip()
+    
+    # Strip Plus Code prefix (e.g., "F9C7+3HV Indira Nilayam" -> "Indira Nilayam")
+    text = PLUS_CODE_PATTERN.sub('', text)
+    
+    # Strip Indian postal codes (6 digits)
+    text = re.sub(r'\b\d{6}\b', '', text)
+    
+    # Strip US-style zip codes
+    text = re.sub(r'\b\d{5}(-\d{4})?\b', '', text)
+    
+    # Clean up multiple commas, trailing commas, excess whitespace
+    text = re.sub(r',\s*,', ',', text)
+    text = re.sub(r',\s*$', '', text)
+    text = re.sub(r'^\s*,', '', text)
+    text = re.sub(r'\s+', ' ', text).strip()
+    
+    return text
+
 
 def _expand_shortlink(url: str) -> str:
     """Expand shortlinks like maps.app.goo.gl and extract best URL or Title"""
     try:
-        with httpx.Client(follow_redirects=True, timeout=5.0) as client:
+        with httpx.Client(follow_redirects=True, timeout=8.0) as client:
             headers = {
                 "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0) AppleWebKit/605.1.15 Chrome/91.0",
                 "Accept-Language": "en-US,en;q=0.9"
             }
             response = client.get(url, headers=headers)
             
-            urls = [url] + [str(r.headers.get("Location", "")) for r in response.history] + [str(r.url) for r in response.history] + [str(response.url)]
+            # Collect ALL URLs in the redirect chain
+            urls = [url]
+            for r in response.history:
+                loc = str(r.headers.get("Location", ""))
+                if loc:
+                    urls.append(loc)
+                urls.append(str(r.url))
+            urls.append(str(response.url))
             
+            # Priority 1: Find @ coordinates in any URL
             for u in urls:
-                if "@" in u or "?q=" in u or "&q=" in u or "ll=" in u or "query=" in u:
+                at_match = MAPS_AT_PATTERN.search(u)
+                if at_match:
                     return u
-                    
+            
+            # Priority 2: Find ?q= with coordinates
+            for u in urls:
+                q_match = re.search(r'[?&](?:q|ll|query)=([^&]+)', u)
+                if q_match:
+                    q_val = urllib.parse.unquote_plus(q_match.group(1))
+                    # If q contains coordinates, return as-is
+                    if re.match(r'^-?\d+\.\d+[,\s]+-?\d+\.\d+$', q_val.strip()):
+                        return u
+                    # q contains a text address — clean it and return for geocoding
+                    cleaned = _clean_maps_address(q_val)
+                    if cleaned and len(cleaned) > 3:
+                        logger.info(f"Short link expanded to address: {cleaned}")
+                        return f"GEOCODE_TITLE:{cleaned}"
+                    return u
+            
+            # Priority 3: Check for center= in HTML
             text = response.text
             match = re.search(r'center=(-?\d+\.\d+)[,%C2]+(-?\d+\.\d+)', text)
             if match:
                 return f"https://maps.google.com/?q={match.group(1)},{match.group(2)}"
             
-            # If coordinates are masked, extract the exact Place name from HTML title
+            # Priority 4: Extract Place name from HTML title
             title_match = re.search(r'<title>(.*?)</title>', text, re.IGNORECASE)
             if title_match:
                 title = title_match.group(1).replace("- Google Maps", "").replace("Google Maps", "").strip()
@@ -97,41 +153,88 @@ def _expand_shortlink(url: str) -> str:
                 
             return urls[-1]
     except Exception as e:
+        logger.warning(f"Short link expansion failed: {e}")
         return url
 
 
-def _geocode_address(text: str, result: LocationResult) -> bool:
-    """Fallback: Free Text Geocoding via OpenStreetMap (Nominatim)"""
+def _nominatim_query(query: str, headers: dict) -> dict:
+    """Run a single Nominatim geocoding query. Returns the best match or None."""
     try:
-        if len(text) < 3:
-            return False
-            
-        with httpx.Client(timeout=4.0) as client:
-            headers = {"User-Agent": "AILogisticsApp/1.0"}
+        with httpx.Client(timeout=5.0) as client:
             resp = client.get(
                 "https://nominatim.openstreetmap.org/search",
-                params={"q": text, "format": "json", "limit": 1},
+                params={"q": query, "format": "json", "limit": 1, "addressdetails": 1},
                 headers=headers
             )
             if resp.status_code == 200:
                 data = resp.json()
                 if data and len(data) > 0:
-                    best = data[0]
-                    result.lat = float(best["lat"])
-                    result.lng = float(best["lon"])
-                    result.precision = "exact"
+                    return data[0]
+    except Exception as e:
+        logger.warning(f"Nominatim query failed for '{query}': {e}")
+    return None
+
+
+def _geocode_address(text: str, result: LocationResult) -> bool:
+    """Free Text Geocoding via OpenStreetMap (Nominatim) with progressive simplification.
+    Tries increasingly simpler address queries until one returns coordinates."""
+    try:
+        if len(text) < 3:
+            return False
+        
+        headers = {"User-Agent": "AILogisticsApp/1.0"}
+        
+        # Clean the input address
+        cleaned = _clean_maps_address(text)
+        
+        # Build progressive query candidates (most specific → least specific)
+        candidates = []
+        if cleaned:
+            candidates.append(cleaned)
+        
+        # If comma-separated address, try subsets: last 4, last 3, last 2 parts
+        parts = [p.strip() for p in cleaned.split(',') if p.strip()]
+        if len(parts) > 3:
+            candidates.append(', '.join(parts[-4:]))  # last 4 parts
+        if len(parts) > 2:
+            candidates.append(', '.join(parts[-3:]))  # last 3 parts
+        if len(parts) > 1:
+            candidates.append(', '.join(parts[-2:]))  # last 2 parts
+        
+        # Also try original text if different from cleaned
+        if text.strip() != cleaned and text.strip() not in candidates:
+            candidates.append(text.strip())
+        
+        # Deduplicate while preserving order
+        seen = set()
+        unique_candidates = []
+        for c in candidates:
+            if c.lower() not in seen and len(c) >= 3:
+                seen.add(c.lower())
+                unique_candidates.append(c)
+        
+        # Try each candidate
+        for query in unique_candidates:
+            logger.info(f"Geocoding attempt: '{query}'")
+            best = _nominatim_query(query, headers)
+            if best:
+                result.lat = float(best["lat"])
+                result.lng = float(best["lon"])
+                result.precision = "exact"
+                
+                raw_name = best.get("display_name", query)
+                name_parts = raw_name.split(",")
+                if len(name_parts) > 2:
+                    clean_name = f"{name_parts[0].strip()}, {name_parts[1].strip()}"
+                else:
+                    clean_name = raw_name
                     
-                    raw_name = best.get("display_name", text)
-                    parts = raw_name.split(",")
-                    if len(parts) > 2:
-                        clean_name = f"{parts[0].strip()}, {parts[-1].strip()}"
-                    else:
-                        clean_name = raw_name
-                        
-                    result.display_name = clean_name
-                    return True
-    except Exception:
-        pass
+                result.display_name = clean_name
+                logger.info(f"Geocoded '{query}' -> ({result.lat}, {result.lng}) = {clean_name}")
+                return True
+                
+    except Exception as e:
+        logger.warning(f"Geocoding failed: {e}")
     return False
 
 
@@ -153,6 +256,12 @@ def resolve_location(text: str) -> LocationResult:
         expanded = _expand_shortlink(url)
         if expanded.startswith("GEOCODE_TITLE:"):
             extracted_title = expanded.replace("GEOCODE_TITLE:", "")
+            # Directly geocode the extracted address — skip known-location partial matching
+            # which would incorrectly match area names (e.g., "kondapur") as low precision
+            logger.info(f"Geocoding extracted address from shortlink: {extracted_title}")
+            if _geocode_address(extracted_title, result):
+                return result
+            # If Nominatim fails, still set the text for downstream processing
             text = text.replace(url, extracted_title)
         else:
             text = text.replace(url, expanded)
@@ -165,8 +274,6 @@ def resolve_location(text: str) -> LocationResult:
         result.precision = "exact"
         result.display_name = f"Maps Location ({result.lat}, {result.lng})"
         return result
-    
-    import urllib.parse
     
     # 2. Try ?q=lat,lng pattern OR extract physical address from q= attribute
     q_match = re.search(r'[?&](?:q|ll|query)=([^&]+)', text)
