@@ -17,30 +17,30 @@ function App() {
         initial={{ opacity: 0, y: -20 }}
         animate={{ opacity: 1, y: 0 }}
         transition={{ duration: 0.5 }}
-        className="flex items-center justify-between mb-8 pb-4 border-b border-white/5"
+        className="flex flex-col sm:flex-row items-start sm:items-center justify-between mb-6 sm:mb-8 pb-4 border-b border-white/5 gap-3"
       >
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/20">
-            <Activity className="text-white w-6 h-6" />
+          <div className="w-9 h-9 sm:w-10 sm:h-10 rounded-xl bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-blue-900/20 flex-shrink-0">
+            <Activity className="text-white w-5 h-5 sm:w-6 sm:h-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight text-white">Logistics Command Center</h1>
-            <p className="text-sm text-slate-400 font-medium tracking-wide">AI Node Aggregation Network</p>
+            <h1 className="text-lg sm:text-2xl font-bold tracking-tight text-white">Logistics Command Center</h1>
+            <p className="text-xs sm:text-sm text-slate-400 font-medium tracking-wide">AI Node Aggregation Network</p>
           </div>
         </div>
         
-        <div className="flex items-center gap-4 text-xs font-mono font-medium text-slate-500 bg-white/5 px-4 py-2 rounded-lg border border-white/5">
-          <span className="flex items-center gap-2">
-            <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></span>
-            SYSTEM ONLINE
+        <div className="flex items-center gap-3 text-[10px] sm:text-xs font-mono font-medium text-slate-500 bg-white/5 px-3 py-1.5 sm:px-4 sm:py-2 rounded-lg border border-white/5">
+          <span className="flex items-center gap-1.5">
+            <span className="w-1.5 h-1.5 sm:w-2 sm:h-2 rounded-full bg-emerald-500 animate-pulse"></span>
+            ONLINE
           </span>
           <span className="text-slate-600">|</span>
-          <span>v2.0.0 (Production)</span>
+          <span>v2.0.0</span>
         </div>
       </motion.header>
 
       {/* Bento Grid Layout */}
-      <main className="grid grid-cols-1 lg:grid-cols-12 gap-6 max-w-[1800px] mx-auto auto-rows-min">
+      <main className="grid grid-cols-1 lg:grid-cols-12 gap-4 sm:gap-6 max-w-[1800px] mx-auto auto-rows-min">
         
         {/* Top Row: Overview Metrics & Map */}
         <div className="lg:col-span-4 flex flex-col gap-6">
@@ -49,7 +49,7 @@ function App() {
           </motion.div>
         </div>
         
-        <div className="lg:col-span-8 flex flex-col min-h-[450px]">
+        <div className="lg:col-span-8 flex flex-col min-h-[300px] sm:min-h-[450px]">
           <motion.div className="h-full flex-1" initial={{ opacity: 0, scale: 0.95 }} animate={{ opacity: 1, scale: 1 }} transition={{ delay: 0.2 }}>
             <DriverMap />
           </motion.div>

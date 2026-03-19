@@ -30,7 +30,7 @@ const BookingsTable = () => {
     };
 
     return (
-        <div className="glass-panel rounded-2xl overflow-hidden flex flex-col h-[400px]">
+        <div className="glass-panel rounded-xl sm:rounded-2xl overflow-hidden flex flex-col h-auto sm:h-[400px]">
             <div className="p-5 border-b border-white/5 flex flex-col sm:flex-row items-center justify-between gap-4">
                 <div className="flex items-center gap-2">
                     <Hash className="w-5 h-5 text-indigo-400" />
@@ -59,7 +59,29 @@ const BookingsTable = () => {
                 </div>
             </div>
 
-            <div className="flex-1 overflow-auto">
+            {/* Mobile Card View */}
+            <div className="flex-1 overflow-auto sm:hidden p-3 space-y-3">
+                {filtered.length === 0 ? (
+                    <div className="p-8 text-center text-slate-500 font-mono text-xs">No records found.</div>
+                ) : filtered.map(b => (
+                    <div key={b.id} className="bg-white/5 border border-white/10 rounded-xl p-3 space-y-2">
+                        <div className="flex items-center justify-between">
+                            <span className="font-mono text-xs font-bold text-indigo-400">UUID-{String(b.id).substring(0,8)}</span>
+                            <span className={cn("px-2 py-0.5 text-[9px] font-bold uppercase tracking-widest rounded-md", statusColors[b.status])}>{b.status}</span>
+                        </div>
+                        <div className="text-xs text-slate-300">{b.customer_phone}</div>
+                        <div className="flex items-center gap-1 text-[10px] font-mono">
+                            <span className="text-blue-400">[{b.pickup_lat?.toFixed(2)},{b.pickup_lng?.toFixed(2)}]</span>
+                            <span className="text-slate-600">→</span>
+                            <span className="text-emerald-400">[{b.drop_lat?.toFixed(2)},{b.drop_lng?.toFixed(2)}]</span>
+                        </div>
+                        <div className="text-xs text-slate-400">{b.declared_weight}kg</div>
+                    </div>
+                ))}
+            </div>
+
+            {/* Desktop Table View */}
+            <div className="flex-1 overflow-auto hidden sm:block">
                 <table className="w-full text-left border-collapse whitespace-nowrap">
                     <thead className="sticky top-0 bg-[#0c0c0e]/95 backdrop-blur-md z-10 border-b border-white/5">
                         <tr className="text-xs font-semibold text-slate-400 uppercase tracking-wider">
@@ -72,7 +94,7 @@ const BookingsTable = () => {
                     </thead>
                     <tbody className="divide-y divide-white/5 text-sm">
                         {filtered.length === 0 ? (
-                            <tr><td colSpan="5" className="p-12 text-center text-slate-500 font-mono">No matching records found in Postgres buffer.</td></tr>
+                            <tr><td colSpan="5" className="p-12 text-center text-slate-500 font-mono">No matching records found.</td></tr>
                         ) : filtered.map(b => (
                             <tr key={b.id} className="hover:bg-white/5 transition-colors group cursor-default">
                                 <td className="p-4 pl-6 text-slate-300 font-mono text-xs font-bold group-hover:text-indigo-400 transition-colors">

@@ -5,18 +5,18 @@ import { Package, Truck, CheckCircle, Clock, Activity } from 'lucide-react';
 import { cn } from '../utils';
 
 const StatCard = ({ title, value, icon: Icon, colorClass }) => (
-    <div className="glass-panel p-5 rounded-2xl flex flex-col justify-between h-[130px] relative overflow-hidden group">
+    <div className="glass-panel p-3 sm:p-5 rounded-xl sm:rounded-2xl flex flex-col justify-between h-[100px] sm:h-[130px] relative overflow-hidden group">
         <div className="absolute -right-6 -top-6 w-24 h-24 rounded-full blur-2xl opacity-20 transition-opacity group-hover:opacity-40" style={{ backgroundColor: colorClass }}></div>
-        <div className="flex items-center justify-between mb-2">
-            <p className="text-sm font-medium text-slate-400 tracking-wide">{title}</p>
-            <div className={cn("p-2 rounded-xl bg-white/5 border border-white/5", `text-[${colorClass}]`)}>
-                <Icon className="h-5 w-5" style={{ color: colorClass }} />
+        <div className="flex items-center justify-between mb-1 sm:mb-2">
+            <p className="text-[11px] sm:text-sm font-medium text-slate-400 tracking-wide">{title}</p>
+            <div className={cn("p-1.5 sm:p-2 rounded-lg sm:rounded-xl bg-white/5 border border-white/5", `text-[${colorClass}]`)}>
+                <Icon className="h-4 w-4 sm:h-5 sm:w-5" style={{ color: colorClass }} />
             </div>
         </div>
         <div className="flex items-end justify-between">
-            <h3 className="text-4xl font-bold tracking-tight text-white">{value}</h3>
-            <span className="text-xs font-mono text-emerald-400 bg-emerald-400/10 px-2 py-0.5 rounded flex items-center gap-1">
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+            <h3 className="text-2xl sm:text-4xl font-bold tracking-tight text-white">{value}</h3>
+            <span className="text-[9px] sm:text-xs font-mono text-emerald-400 bg-emerald-400/10 px-1.5 sm:px-2 py-0.5 rounded flex items-center gap-1">
+                <span className="w-1 h-1 sm:w-1.5 sm:h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
                 LIVE
             </span>
         </div>
