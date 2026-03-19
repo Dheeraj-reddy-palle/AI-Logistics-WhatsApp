@@ -6,6 +6,12 @@ from typing import Optional
 from dataclasses import dataclass
 import logging
 
+try:
+    from openlocationcode import openlocationcode as olc
+    HAS_OLC = True
+except ImportError:
+    HAS_OLC = False
+
 logger = logging.getLogger(__name__)
 
 
@@ -72,7 +78,96 @@ MAPS_AT_PATTERN = re.compile(
 
 # Plus Code pattern (e.g., F9C7+3HV, 8FVC9G+Q2)
 # After URL decoding, + becomes space, so match both: F9C7+3HV or F9C7 3HV
-PLUS_CODE_PATTERN = re.compile(r'^[23456789CFGHJMPQRVWX]{4,8}[+\s][23456789CFGHJMPQRVWX]{2,4}\s*')
+PLUS_CODE_PATTERN = re.compile(r'^([23456789CFGHJMPQRVWX]{4,8})[+\s]([23456789CFGHJMPQRVWX]{2,4})\s*')
+
+
+def _decode_plus_code(q_value: str) -> Optional[dict]:
+    """Try to decode a Plus Code from a Google Maps ?q= value.
+    Returns {lat, lng, display_name} if successful, None otherwise.
+    
+    Plus Codes like 'F9C7+3HV Indira Nilayam, Kondapur, Hyderabad' contain:
+    - A short Plus Code (F9C7+3HV) 
+    - A text address for reference location recovery
+    """
+    if not HAS_OLC:
+        return None
+    
+    # Extract Plus Code from start of q_value
+    # Match patterns like: F9C7+3HV or F9C7 3HV (URL-decoded)
+    code_match = PLUS_CODE_PATTERN.match(q_value.strip())
+    if not code_match:
+        return None
+    
+    # Reconstruct the Plus Code with + sign
+    short_code = f"{code_match.group(1)}+{code_match.group(2)}"
+    remaining_text = q_value[code_match.end():].strip().strip(',')
+    
+    logger.info(f"Found Plus Code: {short_code}, address context: {remaining_text[:60]}")
+    
+    try:
+        # Check if it's already a full code (10+ chars)
+        if olc.isValid(short_code) and olc.isFull(short_code):
+            decoded = olc.decode(short_code)
+            display = _clean_maps_address(remaining_text) if remaining_text else f"Location ({decoded.latitudeCenter:.6f}, {decoded.longitudeCenter:.6f})"
+            return {
+                "lat": decoded.latitudeCenter,
+                "lng": decoded.longitudeCenter,
+                "display_name": display
+            }
+        
+        # Short code — need a reference location from the address text
+        if not remaining_text:
+            return None
+        
+        # Get reference coordinates by geocoding the address text
+        cleaned_addr = _clean_maps_address(remaining_text)
+        ref_lat, ref_lng = _get_reference_coords(cleaned_addr)
+        
+        if ref_lat is None:
+            logger.warning(f"Could not get reference coords for Plus Code recovery from: {cleaned_addr}")
+            return None
+        
+        # Recover the full Plus Code using reference location
+        full_code = olc.recoverNearest(short_code, ref_lat, ref_lng)
+        logger.info(f"Recovered full Plus Code: {short_code} -> {full_code}")
+        
+        decoded = olc.decode(full_code)
+        
+        # Build a display name from the address text
+        display = cleaned_addr.split(',')[0].strip() if cleaned_addr else f"Location ({decoded.latitudeCenter:.6f}, {decoded.longitudeCenter:.6f})"
+        # Add area context
+        parts = [p.strip() for p in cleaned_addr.split(',')]
+        if len(parts) >= 2:
+            display = f"{parts[0]}, {parts[-2] if len(parts) > 2 else parts[-1]}"
+        
+        return {
+            "lat": decoded.latitudeCenter,
+            "lng": decoded.longitudeCenter,
+            "display_name": display
+        }
+    except Exception as e:
+        logger.warning(f"Plus Code decoding failed for {short_code}: {e}")
+        return None
+
+
+def _get_reference_coords(address_text: str) -> tuple:
+    """Get approximate reference coordinates by geocoding an address.
+    Used for Plus Code recovery. Returns (lat, lng) or (None, None)."""
+    # Try progressively simpler address queries  
+    parts = [p.strip() for p in address_text.split(',') if p.strip()]
+    candidates = [address_text]
+    if len(parts) > 2:
+        candidates.append(', '.join(parts[-3:]))
+    if len(parts) > 1:
+        candidates.append(', '.join(parts[-2:]))
+    
+    headers = {"User-Agent": "AILogisticsApp/1.0"}
+    for query in candidates:
+        result = _nominatim_query(query, headers)
+        if result:
+            return float(result["lat"]), float(result["lon"])
+    
+    return None, None
 
 
 def _clean_maps_address(raw_address: str) -> str:
@@ -123,7 +218,7 @@ def _expand_shortlink(url: str) -> str:
                 if at_match:
                     return u
             
-            # Priority 2: Find ?q= with coordinates
+            # Priority 2: Find ?q= with content
             for u in urls:
                 q_match = re.search(r'[?&](?:q|ll|query)=([^&]+)', u)
                 if q_match:
@@ -131,7 +226,16 @@ def _expand_shortlink(url: str) -> str:
                     # If q contains coordinates, return as-is
                     if re.match(r'^-?\d+\.\d+[,\s]+-?\d+\.\d+$', q_val.strip()):
                         return u
-                    # q contains a text address — clean it and return for geocoding
+                    
+                    # Try to decode Plus Code for exact coordinates
+                    plus_result = _decode_plus_code(q_val)
+                    if plus_result:
+                        lat, lng = plus_result["lat"], plus_result["lng"]
+                        display = plus_result["display_name"]
+                        logger.info(f"Plus Code decoded: ({lat}, {lng}) = {display}")
+                        return f"COORDS:{lat},{lng},{display}"
+                    
+                    # Fallback: q contains a text address — clean it and return for geocoding
                     cleaned = _clean_maps_address(q_val)
                     if cleaned and len(cleaned) > 3:
                         logger.info(f"Short link expanded to address: {cleaned}")
@@ -254,7 +358,16 @@ def resolve_location(text: str) -> LocationResult:
     if shortlink_match:
         url = shortlink_match.group(1)
         expanded = _expand_shortlink(url)
-        if expanded.startswith("GEOCODE_TITLE:"):
+        if expanded.startswith("COORDS:"):
+            # Plus Code decoded — exact coordinates available
+            parts = expanded.replace("COORDS:", "").split(",", 2)
+            result.lat = float(parts[0])
+            result.lng = float(parts[1])
+            result.precision = "exact"
+            result.display_name = parts[2] if len(parts) > 2 else f"Location ({result.lat}, {result.lng})"
+            logger.info(f"Shortlink resolved via Plus Code: ({result.lat}, {result.lng}) = {result.display_name}")
+            return result
+        elif expanded.startswith("GEOCODE_TITLE:"):
             extracted_title = expanded.replace("GEOCODE_TITLE:", "")
             # Directly geocode the extracted address — skip known-location partial matching
             # which would incorrectly match area names (e.g., "kondapur") as low precision

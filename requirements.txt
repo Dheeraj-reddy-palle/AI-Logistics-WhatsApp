@@ -10,3 +10,4 @@ redis==5.0.4
 twilio==9.0.4
 httpx==0.27.0
 python-multipart==0.0.9
+openlocationcode==1.0.1
