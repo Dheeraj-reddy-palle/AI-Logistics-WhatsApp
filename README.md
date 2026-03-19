@@ -2,6 +2,8 @@
 
 A production-ready, AI-powered logistics dispatcher that runs entirely over **WhatsApp** using **Twilio**. Users can book cabs, schedule cargo deliveries, and track drivers in real-time — all through natural conversation.
 
+🌐 **Live Dashboard:** [https://frontend-iota-eight-34.vercel.app](https://frontend-iota-eight-34.vercel.app)
+
 Built with **FastAPI**, **PostgreSQL**, **Redis**, and a custom **regex-based NLP engine** — no paid OpenAI/LLM APIs required.
 
 ---
