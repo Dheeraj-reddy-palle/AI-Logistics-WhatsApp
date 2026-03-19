@@ -87,3 +87,9 @@ body {
 .leaflet-control-attribution {
   filter: invert(100%) hue-rotate(180deg) brightness(95%) contrast(90%);
 }
+
+/* Custom marker icon reset */
+.custom-marker {
+  background: transparent !important;
+  border: none !important;
+}
