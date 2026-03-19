@@ -517,6 +517,7 @@ async def _generate_quote_and_confirm(phone: str) -> dict:
             f"📍 Pickup: {pickup_name}",
             f"📍 Drop: {drop_name}",
             f"📏 Distance: {quote['distance_km']}km",
+            f"⏱️ ETA: ~{quote.get('duration_min', '?')} min",
             f"💰 **Estimated Fare: ₹{quote['price']}**",
         ]
     else:
@@ -527,6 +528,7 @@ async def _generate_quote_and_confirm(phone: str) -> dict:
             f"📦 Weight: {weight}kg",
             f"🚛 Vehicle: {vehicle_type.title()}",
             f"📏 Distance: {quote['distance_km']}km",
+            f"⏱️ ETA: ~{quote.get('duration_min', '?')} min",
             f"💰 **Estimated Price: ₹{quote['price']}**",
             f"\n{quote['disclaimer']}",
         ]
