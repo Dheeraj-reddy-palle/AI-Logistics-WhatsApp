@@ -665,12 +665,12 @@ async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict
         "otp_attempts": 0,
     })
     
-    # In local dev without Twilio configured, we still print it to the reply for testing
-    if not sms_sent and not settings.TWILIO_SMS_NUMBER:
+    # In local dev without Twilio configured, or if the API call failed (e.g. 429 limit)
+    if not sms_sent:
         reply_msg = (
             f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-            f"🔐 [DEV MODE] Your OTP is: **{otp}**\n"
-            "(SMS features require Twilio setup in .env)\n\n"
+            f"⚠️ **SMS Delivery Failed / Dev Mode**\n"
+            f"Your OTP is: **{otp}**\n\n"
             "Please enter the OTP to verify and complete your booking:"
         )
     else:
