@@ -4,6 +4,7 @@ Handles all 10 logistics scenarios using rule-based NLP + Redis state management
 """
 import logging
 import uuid
+import random
 from decimal import Decimal
 
 from app.config.settings import settings
@@ -67,6 +68,12 @@ async def handle_incoming_message(phone_number: str, message_text: str, message_
             result = await _handle_collecting_passenger(phone_number, message_text, parsed, context)
         elif current_flow == "booking_confirmed":
             result = await _handle_booking_confirmed(phone_number, message_text, parsed, context)
+        elif current_flow == "collecting_name":
+            result = await _handle_collecting_name(phone_number, message_text, parsed, context)
+        elif current_flow == "collecting_mobile":
+            result = await _handle_collecting_mobile(phone_number, message_text, parsed, context)
+        elif current_flow == "collecting_otp":
+            result = await _handle_collecting_otp(phone_number, message_text, parsed, context)
         elif current_flow == "tracking":
             result = await _handle_tracking(phone_number, message_text, parsed, context)
         else:
@@ -552,7 +559,16 @@ async def _handle_booking_confirmed(phone: str, text: str, parsed, context: dict
     """Handle state: booking confirmed — waiting for user to confirm or cancel"""
     
     if parsed.intent == "confirmation":
-        return await _create_booking(phone, context)
+        # Move to collecting customer name
+        await state_manager.update_state(phone, "collecting_name", {})
+        return {
+            "reply": (
+                "Great! Let's finalize your booking.\n\n"
+                "👤 Please enter your **full name**:"
+            ),
+            "state": "collecting_name",
+            "booking_id": None,
+        }
     
     # User didn't confirm
     return {
@@ -560,6 +576,124 @@ async def _handle_booking_confirmed(phone: str, text: str, parsed, context: dict
         "state": "booking_confirmed",
         "booking_id": None,
     }
+
+
+async def _handle_collecting_name(phone: str, text: str, parsed, context: dict) -> dict:
+    """Handle state: collecting customer name"""
+    import re
+    
+    name = text.strip()
+    
+    # Basic validation: name should be at least 2 chars, mostly letters
+    if len(name) < 2 or not re.match(r'^[A-Za-z\s\.]+$', name):
+        return {
+            "reply": (
+                "❌ Please enter a valid name (letters only, at least 2 characters).\n"
+                "Example: Rahul Kumar"
+            ),
+            "state": "collecting_name",
+            "booking_id": None,
+        }
+    
+    # Capitalize properly
+    name = name.title()
+    
+    await state_manager.update_state(phone, "collecting_mobile", {
+        "customer_name": name,
+    })
+    
+    return {
+        "reply": (
+            f"✅ Name: {name}\n\n"
+            "📱 Please enter your **mobile number** for booking confirmation:\n"
+            "Example: 9876543210"
+        ),
+        "state": "collecting_mobile",
+        "booking_id": None,
+    }
+
+
+async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict) -> dict:
+    """Handle state: collecting mobile number and sending OTP"""
+    import re
+    
+    # Clean and extract phone number
+    cleaned = text.strip().replace(" ", "").replace("-", "").replace("+91", "")
+    phone_match = re.match(r'^(\d{10})$', cleaned)
+    
+    if not phone_match:
+        return {
+            "reply": (
+                "❌ Please enter a valid 10-digit mobile number.\n"
+                "Example: 9876543210"
+            ),
+            "state": "collecting_mobile",
+            "booking_id": None,
+        }
+    
+    mobile = phone_match.group(1)
+    
+    # Generate 6-digit OTP
+    otp = str(random.randint(100000, 999999))
+    
+    logger.info(f"[{phone}] Generated OTP {otp} for mobile {mobile}")
+    
+    await state_manager.update_state(phone, "collecting_otp", {
+        "customer_mobile": mobile,
+        "otp": otp,
+        "otp_attempts": 0,
+    })
+    
+    return {
+        "reply": (
+            f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
+            f"🔐 Your OTP is: **{otp}**\n"
+            "(In production, this would be sent via SMS)\n\n"
+            "Please enter the OTP to verify and complete your booking:"
+        ),
+        "state": "collecting_otp",
+        "booking_id": None,
+    }
+
+
+async def _handle_collecting_otp(phone: str, text: str, parsed, context: dict) -> dict:
+    """Handle state: collecting and verifying OTP"""
+    import re
+    
+    entered_otp = re.sub(r'\s+', '', text.strip())
+    stored_otp = context.get("otp", "")
+    attempts = context.get("otp_attempts", 0) + 1
+    
+    if entered_otp != stored_otp:
+        if attempts >= 3:
+            await state_manager.clear_state(phone)
+            return {
+                "reply": (
+                    "❌ Too many incorrect OTP attempts.\n"
+                    "Your session has been reset for security.\n"
+                    "Please start a new booking."
+                ),
+                "state": "idle",
+                "booking_id": None,
+            }
+        
+        await state_manager.update_state(phone, "collecting_otp", {
+            "otp_attempts": attempts,
+        })
+        
+        remaining = 3 - attempts
+        return {
+            "reply": (
+                f"❌ Incorrect OTP. {remaining} attempt{'s' if remaining > 1 else ''} remaining.\n"
+                "Please enter the correct OTP:"
+            ),
+            "state": "collecting_otp",
+            "booking_id": None,
+        }
+    
+    # OTP verified — create the booking
+    logger.info(f"[{phone}] OTP verified successfully for {context.get('customer_name')}")
+    return await _create_booking(phone, context)
 
 
 async def _create_booking(phone: str, context: dict) -> dict:

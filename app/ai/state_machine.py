@@ -18,6 +18,9 @@ class StateMachine:
         "collecting_weight",
         "collecting_passenger",
         "booking_confirmed",
+        "collecting_name",
+        "collecting_mobile",
+        "collecting_otp",
         "driver_assigned",
         "tracking",
     ]
@@ -54,6 +57,9 @@ class StateMachine:
                 "passenger_phone": None,
                 "booked_by": None,
                 "booking_id": None,
+                "customer_name": None,
+                "customer_mobile": None,
+                "otp": None,
             }
         }
 
