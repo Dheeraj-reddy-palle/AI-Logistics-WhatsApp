@@ -1,40 +1,40 @@
 import pytest
-from unittest.mock import patch
-from tests.test_webhook import get_valid_payload
+from unittest.mock import AsyncMock, patch
+
 
 @pytest.mark.asyncio
-async def test_idempotency_duplicate_rejection(async_client, mock_redis, mock_celery_task):
-    """Test that duplicate msg_ids are intercepted by Redis setnx."""
-    
-    # Simulate Redis setnx returning False (key already exists)
-    mock_redis.setnx.return_value = False
-    
-    with patch("app.api.middleware.security.hmac.compare_digest", return_value=True):
-        response = await async_client.post(
-            "/api/v1/webhook",
-            json=get_valid_payload("msg_123"),
-            headers={"X-Hub-Signature-256": "sha256=mocked_sig"}
-        )
-        
-    assert response.status_code == 200
-    assert response.json().get("ack") == "duplicate"
-    
-    # Celery should NOT have been called for dupes
-    mock_celery_task.assert_not_called()
+async def test_idempotency_duplicate_rejection():
+    """Test that duplicate msg_ids are rejected by the state machine's idempotency check."""
+
+    with patch("app.ai.agent.state_manager") as mock_sm:
+        mock_sm.check_idempotency = AsyncMock(return_value=False)
+
+        from app.ai.agent import handle_incoming_message
+
+        result = await handle_incoming_message("1234567890", "Book a cab", "msg_123")
+
+    assert result["state"] == "duplicate"
+    assert "already processed" in result["reply"].lower()
+
 
 @pytest.mark.asyncio
-async def test_idempotency_ttl_set(async_client, mock_redis, mock_celery_task):
-    """Ensure the idempotency key TTL is set to 24 hours."""
-    
-    mock_redis.setnx.return_value = True
-    
-    with patch("app.api.middleware.security.hmac.compare_digest", return_value=True):
-        await async_client.post(
-            "/api/v1/webhook",
-            json=get_valid_payload("msg_456"),
-            headers={"X-Hub-Signature-256": "sha256=mocked_sig"}
-        )
-        
-    # Check that redis.expire was called with 86400 seconds (24h)
-    mock_redis.expire.assert_called_with("msg:seen:msg_456", 86400)
-    mock_celery_task.assert_called_once()
+async def test_idempotency_allows_new_message():
+    """Test that new message IDs pass the idempotency check and proceed."""
+
+    with patch("app.ai.agent.state_manager") as mock_sm:
+        mock_sm.check_idempotency = AsyncMock(return_value=True)
+        mock_sm.is_cancel_command = lambda text: False
+        mock_sm.get_state = AsyncMock(return_value={"current_flow": "idle", "context": {}})
+
+        # Patch the location resolver and parse_message to avoid side effects
+        with patch("app.ai.agent.parse_message") as mock_parse:
+            mock_parse.return_value = type("Parsed", (), {
+                "intent": "greeting", "pickup": None, "drop": None,
+                "weight": None, "service_type": "delivery", "is_remote": False,
+                "confidence": 1.0,
+            })()
+
+            from app.ai.agent import handle_incoming_message
+            result = await handle_incoming_message("1234567890", "Hello", "msg_new_456")
+
+    assert result["state"] != "duplicate"
