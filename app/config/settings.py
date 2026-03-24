@@ -1,4 +1,5 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic import field_validator
 from typing import Optional
 
 import os
@@ -47,6 +48,16 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "llama3"
     HUGGINGFACE_API_KEY: Optional[str] = None
     HUGGINGFACE_MODEL: str = "mistralai/Mistral-7B-Instruct-v0.2"
+
+    @field_validator("DATABASE_URL", mode="before")
+    @classmethod
+    def fix_database_url(cls, v: str) -> str:
+        """Render provides postgres:// but asyncpg needs postgresql+asyncpg://"""
+        if v.startswith("postgres://"):
+            v = v.replace("postgres://", "postgresql+asyncpg://", 1)
+        elif v.startswith("postgresql://"):
+            v = v.replace("postgresql://", "postgresql+asyncpg://", 1)
+        return v
 
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 

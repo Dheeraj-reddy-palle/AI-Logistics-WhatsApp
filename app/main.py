@@ -16,18 +16,21 @@ logging.basicConfig(
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Application startup – seed mock drivers in dev mode"""
+    """Application startup – create tables and seed mock drivers in dev mode"""
+    from app.db.session import AsyncSessionLocal
+    from app.db.base import Base
+    from app.db.session import engine
+
+    # Create all tables in ALL environments (needed for fresh Render PostgreSQL)
+    async with engine.begin() as conn:
+        await conn.run_sync(Base.metadata.create_all)
+    logging.info(">>> [STARTUP] Database tables ensured.")
+
+    # Seed mock drivers only in dev mode
     if settings.ENV == "dev":
-        from app.db.session import AsyncSessionLocal
-        from app.db.base import Base
-        from app.db.session import engine
         from app.models.driver import Driver, VehicleType
         from sqlalchemy.future import select
         import uuid
-        
-        # Create all tables
-        async with engine.begin() as conn:
-            await conn.run_sync(Base.metadata.create_all)
 
         async with AsyncSessionLocal() as session:
             try:
