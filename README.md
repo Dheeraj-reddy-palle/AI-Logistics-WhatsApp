@@ -30,7 +30,8 @@ Built with **FastAPI**, **PostgreSQL**, **Redis**, and a custom **regex-based NL
 |---|---|
 | 🚕 **Cab Booking** | Book passenger rides via WhatsApp with real-time pricing |
 | 📦 **Cargo Delivery** | Schedule freight shipments with weight-based pricing |
-| 📍 **Smart Location Parsing** | Accepts Google Maps links, short links, coordinates, text addresses, and WhatsApp location pins |
+| 🔐 **OTP Verification** | Secure booking completion with OTP verification (in-chat fallback for Sandbox) |
+| 📍 **Smart Location Parsing** | Robust location extraction handling Google Maps JS redirects, protobuffers, text addresses, and pins |
 | 🤖 **NLP Engine** | Rule-based intent classifier (no paid AI APIs needed) |
 | 🗺️ **Live Driver Tracking** | Redis-powered driver location tracking with Maps links |
 | 💰 **Distance-Based Pricing** | Haversine formula calculates real-world distances for accurate quotes |
@@ -231,6 +232,7 @@ Try these messages:
 | `17.2403,78.4294` | Sends exact coordinates |
 | *(Share a location pin)* | Auto-detects WhatsApp location |
 | *(Paste Google Maps link)* | Extracts coordinates from link |
+| `123456` | Example OTP code entered to verify a booking |
 | `track` | Shows driver live location |
 | `cancel` | Resets the conversation |
 
@@ -251,7 +253,7 @@ idle → collecting_pickup → collecting_drop → collecting_weight → booking
 ### Location Resolution Priority
 
 1. **WhatsApp Location Pin** — Native `Latitude`/`Longitude` from Twilio
-2. **Google Maps Short Link** — Expands `maps.app.goo.gl` via HTTP redirect
+2. **Google Maps Short Link** — Expands `maps.app.goo.gl` via HTTP redirect and raw HTML/Protobuf parsing for robust link extraction
 3. **Google Maps URL** — Parses `?q=`, `@lat,lng`, `/lat,lng` patterns
 4. **Raw Coordinates** — Matches `17.24,78.43` format
 5. **Known Locations DB** — Hardcoded places (RGIA, Kondapur, etc.)
