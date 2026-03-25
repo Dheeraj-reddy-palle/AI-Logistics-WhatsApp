@@ -204,14 +204,17 @@ def _extract_coords_from_html(html: str) -> Optional[tuple]:
     Tries multiple strategies since Google embeds coords in various ways.
     Returns (lat, lng, display_name) or None.
     """
-    # Strategy 1: Look for coordinates in meta tags (og:url, canonical)
+    # Strategy 1: Look for coordinates in meta tags (og:url, canonical, og:image)
     for pattern in [
-        r'<meta[^>]*?content=["\']https?://[^"\']*/maps[^"\']*/(@(-?\d+\.\d+),(-?\d+\.\d+))',
-        r'<link[^>]*?href=["\']https?://[^"\']*/maps[^"\']*/(@(-?\d+\.\d+),(-?\d+\.\d+))',
+        r'<meta[^>]*?content=["\']https?://[^"\']*/maps[^"\']*/@(-?\d+\.\d+),(-?\d+\.\d+)',
+        r'<link[^>]*?href=["\']https?://[^"\']*/maps[^"\']*/@(-?\d+\.\d+),(-?\d+\.\d+)',
+        r'<meta[^>]*?content=["\']https?://[^"\']*/maps(?:/place)?/(?:[^"\']*/)?@(-?\d+\.\d+),(-?\d+\.\d+)',
+        r'<meta[^>]*?content=["\']https?://[^"\']*/maps/place/(-?\d+\.\d+)[,%C2]+(-?\d+\.\d+)',
+        r'll=(-?\d+\.\d+)[,%C2]+(-?\d+\.\d+)',
     ]:
         m = re.search(pattern, html, re.IGNORECASE)
         if m:
-            return (float(m.group(2)), float(m.group(3)), None)
+            return (float(m.group(1)), float(m.group(2)), None)
     
     # Strategy 2: Look for coordinates in JavaScript/JSON data embedded in the page
     for pattern in [
@@ -272,7 +275,7 @@ def _expand_shortlink(url: str) -> str:
             
             logger.info(f"Short link redirect chain ({len(urls)} URLs): {' -> '.join(u[:80] for u in urls)}")
             
-            # Priority 1: Find @ coordinates in any URL in the redirect chain
+            # Priority 1: Find @ or /place/ coordinates in any URL in the redirect chain
             for u in urls:
                 at_match = MAPS_AT_PATTERN.search(u)
                 if at_match:
@@ -280,6 +283,14 @@ def _expand_shortlink(url: str) -> str:
                     if -90 <= lat <= 90 and -180 <= lng <= 180:
                         logger.info(f"Found @coords in redirect chain: ({lat}, {lng})")
                         return u
+                
+                # Check for /place/lat,lng format
+                place_match = re.search(r'/maps/place/(-?\d+\.\d+)[,%2C]+(-?\d+\.\d+)', u)
+                if place_match:
+                    lat, lng = float(place_match.group(1)), float(place_match.group(2))
+                    if -90 <= lat <= 90 and -180 <= lng <= 180:
+                        logger.info(f"Found /place/coords in redirect chain: ({lat}, {lng})")
+                        return f"COORDS:{lat},{lng},Maps Location ({lat}, {lng})"
             
             # Priority 2: Find !3dlat!4dlng (protocol buffer format) in URLs
             for u in urls:
@@ -437,6 +448,18 @@ def resolve_location(text: str) -> LocationResult:
                 result.precision = "exact"
                 result.display_name = f"Maps Location ({lat}, {lng})"
                 logger.info(f"Extracted @coords directly from URL: ({lat}, {lng})")
+                return result
+                
+        # Check for /place/lat,lng directly in URL
+        place_match = re.search(r'/maps/place/(-?\d+\.\d+)[,%2C]+(-?\d+\.\d+)', url)
+        if place_match:
+            lat, lng = float(place_match.group(1)), float(place_match.group(2))
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                result.lat = lat
+                result.lng = lng
+                result.precision = "exact"
+                result.display_name = f"Maps Location ({lat}, {lng})"
+                logger.info(f"Extracted /place/ coords directly from URL: ({lat}, {lng})")
                 return result
         
         # Check for !3d!4d protocol buffer coords in URL
