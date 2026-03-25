@@ -171,7 +171,7 @@ def _classify_intent(text: str) -> tuple:
             return ("booking", 0.80)
     
     # If there's a coordinate pattern or map link, likely a location input  
-    if COORD_PATTERN.search(text) or "maps.app.goo.gl" in text or "goo.gl/maps" in text or "maps.google.com" in text:
+    if COORD_PATTERN.search(text) or "maps.app.goo.gl" in text or "goo.gl/maps" in text or "maps.google.com" in text or "google.com/maps" in text:
         return ("location_input", 0.85)
     
     # Default

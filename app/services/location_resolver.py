@@ -60,9 +60,15 @@ KNOWN_LOCATIONS = {
     "chennai": {"lat": 13.0827, "lng": 80.2707, "precision": "low", "name": "Chennai"},
 }
 
-# Regex for Google Maps link
+# Regex for Google Maps link (broadened to catch all variants)
 MAPS_LINK_PATTERN = re.compile(
     r'(?:https?://)?(?:www\.)?(?:google\.com/maps|maps\.google\.com|maps\.app\.goo\.gl|goo\.gl/maps)[^\s]*[?&/@](-?\d+\.?\d*)[,/](-?\d+\.?\d*)',
+    re.IGNORECASE
+)
+
+# Master regex to detect ANY Google Maps URL in text
+ANY_MAPS_URL_PATTERN = re.compile(
+    r'(https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|maps\.google\.com|www\.google\.com/maps|google\.com/maps)[^\s]*)',
     re.IGNORECASE
 )
 
@@ -193,13 +199,65 @@ def _clean_maps_address(raw_address: str) -> str:
     return text
 
 
+def _extract_coords_from_html(html: str) -> Optional[tuple]:
+    """Extract lat/lng coordinates from Google Maps HTML page content.
+    Tries multiple strategies since Google embeds coords in various ways.
+    Returns (lat, lng, display_name) or None.
+    """
+    # Strategy 1: Look for coordinates in meta tags (og:url, canonical)
+    for pattern in [
+        r'<meta[^>]*?content=["\']https?://[^"\']*/maps[^"\']*/(@(-?\d+\.\d+),(-?\d+\.\d+))',
+        r'<link[^>]*?href=["\']https?://[^"\']*/maps[^"\']*/(@(-?\d+\.\d+),(-?\d+\.\d+))',
+    ]:
+        m = re.search(pattern, html, re.IGNORECASE)
+        if m:
+            return (float(m.group(2)), float(m.group(3)), None)
+    
+    # Strategy 2: Look for coordinates in JavaScript/JSON data embedded in the page
+    for pattern in [
+        r'\[null,null,(-?\d+\.\d{4,}),(-?\d+\.\d{4,})\]',
+        r'center\\u003d(-?\d+\.\d+)%2C(-?\d+\.\d+)',
+        r'@(-?\d+\.\d{5,}),(-?\d+\.\d{5,})',
+        r'!3d(-?\d+\.\d{4,})!4d(-?\d+\.\d{4,})',
+        r'center=(-?\d+\.\d+)[,%C2]+(-?\d+\.\d+)',
+        r'll=(-?\d+\.\d+),(-?\d+\.\d+)',
+        r'destination=(-?\d+\.\d+),(-?\d+\.\d+)',
+        r'\\"(-?\d+\.\d{5,})\\"[,\s]*\\"(-?\d+\.\d{5,})',
+    ]:
+        m = re.search(pattern, html)
+        if m:
+            lat, lng = float(m.group(1)), float(m.group(2))
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                return (lat, lng, None)
+    
+    return None
+
+
+def _extract_place_name_from_html(html: str) -> Optional[str]:
+    """Extract a place name from Google Maps HTML."""
+    m = re.search(r'<meta[^>]*property=["\']og:title["\'][^>]*content=["\']([^"\'>]+)', html, re.IGNORECASE)
+    if m:
+        name = m.group(1).replace("- Google Maps", "").strip()
+        if name and name != "Google Maps":
+            return name
+    m = re.search(r'<title>(.*?)</title>', html, re.IGNORECASE)
+    if m:
+        name = m.group(1).replace("- Google Maps", "").replace("Google Maps", "").strip()
+        if name and len(name) > 2:
+            return name
+    return None
+
+
 def _expand_shortlink(url: str) -> str:
-    """Expand shortlinks like maps.app.goo.gl and extract best URL or Title"""
+    """Expand shortlinks like maps.app.goo.gl and extract coordinates or address.
+    Uses multiple strategies: redirect chain URLs, HTML body parsing, meta tags.
+    """
     try:
-        with httpx.Client(follow_redirects=True, timeout=8.0) as client:
+        with httpx.Client(follow_redirects=True, timeout=10.0) as client:
             headers = {
-                "User-Agent": "Mozilla/5.0 (iPhone; CPU iPhone OS 14_0) AppleWebKit/605.1.15 Chrome/91.0",
-                "Accept-Language": "en-US,en;q=0.9"
+                "User-Agent": "Mozilla/5.0 (Linux; Android 11; SM-G998B) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.6099.144 Mobile Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "en-US,en;q=0.9",
             }
             response = client.get(url, headers=headers)
             
@@ -212,49 +270,59 @@ def _expand_shortlink(url: str) -> str:
                 urls.append(str(r.url))
             urls.append(str(response.url))
             
-            # Priority 1: Find @ coordinates in any URL
+            logger.info(f"Short link redirect chain ({len(urls)} URLs): {' -> '.join(u[:80] for u in urls)}")
+            
+            # Priority 1: Find @ coordinates in any URL in the redirect chain
             for u in urls:
                 at_match = MAPS_AT_PATTERN.search(u)
                 if at_match:
-                    return u
+                    lat, lng = float(at_match.group(1)), float(at_match.group(2))
+                    if -90 <= lat <= 90 and -180 <= lng <= 180:
+                        logger.info(f"Found @coords in redirect chain: ({lat}, {lng})")
+                        return u
             
-            # Priority 2: Find ?q= with content
+            # Priority 2: Find !3dlat!4dlng (protocol buffer format) in URLs
             for u in urls:
-                q_match = re.search(r'[?&](?:q|ll|query)=([^&]+)', u)
+                pb_match = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', u)
+                if pb_match:
+                    lat, lng = float(pb_match.group(1)), float(pb_match.group(2))
+                    logger.info(f"Found !3d!4d coords in URL: ({lat}, {lng})")
+                    return f"COORDS:{lat},{lng},Maps Location ({lat}, {lng})"
+            
+            # Priority 3: Find ?q= or ?ll= with coordinates or address
+            for u in urls:
+                q_match = re.search(r'[?&](?:q|ll|query|center)=([^&]+)', u)
                 if q_match:
                     q_val = urllib.parse.unquote_plus(q_match.group(1))
-                    # If q contains coordinates, return as-is
                     if re.match(r'^-?\d+\.\d+[,\s]+-?\d+\.\d+$', q_val.strip()):
                         return u
-                    
-                    # Try to decode Plus Code for exact coordinates
                     plus_result = _decode_plus_code(q_val)
                     if plus_result:
                         lat, lng = plus_result["lat"], plus_result["lng"]
                         display = plus_result["display_name"]
                         logger.info(f"Plus Code decoded: ({lat}, {lng}) = {display}")
                         return f"COORDS:{lat},{lng},{display}"
-                    
-                    # Fallback: q contains a text address — clean it and return for geocoding
                     cleaned = _clean_maps_address(q_val)
                     if cleaned and len(cleaned) > 3:
                         logger.info(f"Short link expanded to address: {cleaned}")
                         return f"GEOCODE_TITLE:{cleaned}"
-                    return u
             
-            # Priority 3: Check for center= in HTML
-            text = response.text
-            match = re.search(r'center=(-?\d+\.\d+)[,%C2]+(-?\d+\.\d+)', text)
-            if match:
-                return f"https://maps.google.com/?q={match.group(1)},{match.group(2)}"
+            # Priority 4: Extract coordinates from HTML body
+            html = response.text
+            coords = _extract_coords_from_html(html)
+            if coords:
+                lat, lng, _ = coords
+                place_name = _extract_place_name_from_html(html)
+                display = place_name or f"Maps Location ({lat}, {lng})"
+                logger.info(f"Extracted coords from HTML body: ({lat}, {lng}) = {display}")
+                return f"COORDS:{lat},{lng},{display}"
             
-            # Priority 4: Extract Place name from HTML title
-            title_match = re.search(r'<title>(.*?)</title>', text, re.IGNORECASE)
-            if title_match:
-                title = title_match.group(1).replace("- Google Maps", "").replace("Google Maps", "").strip()
-                if title:
-                    return f"GEOCODE_TITLE:{title}"
-                
+            # Priority 5: Extract place name from HTML for geocoding
+            place_name = _extract_place_name_from_html(html)
+            if place_name:
+                logger.info(f"Extracted place name from HTML: {place_name}")
+                return f"GEOCODE_TITLE:{place_name}"
+            
             return urls[-1]
     except Exception as e:
         logger.warning(f"Short link expansion failed: {e}")
@@ -353,28 +421,57 @@ def resolve_location(text: str) -> LocationResult:
     # Check for direct TITLE intercept from prior passes
     extracted_title = ""
     
-    # 0. Expand shortlinks if present
-    shortlink_match = re.search(r'(https?://(?:maps\.app\.goo\.gl|goo\.gl/maps|maps\.google\.com/)[^\s]+)', text)
-    if shortlink_match:
-        url = shortlink_match.group(1)
+    # 0. Expand shortlinks / Google Maps URLs if present
+    maps_url_match = ANY_MAPS_URL_PATTERN.search(text)
+    if maps_url_match:
+        url = maps_url_match.group(1)
+        logger.info(f"Detected Google Maps URL: {url[:100]}")
+        
+        # First: try extracting coords directly from the URL itself (no HTTP needed)
+        at_match = MAPS_AT_PATTERN.search(url)
+        if at_match:
+            lat, lng = float(at_match.group(1)), float(at_match.group(2))
+            if -90 <= lat <= 90 and -180 <= lng <= 180:
+                result.lat = lat
+                result.lng = lng
+                result.precision = "exact"
+                result.display_name = f"Maps Location ({lat}, {lng})"
+                logger.info(f"Extracted @coords directly from URL: ({lat}, {lng})")
+                return result
+        
+        # Check for !3d!4d protocol buffer coords in URL
+        pb_match = re.search(r'!3d(-?\d+\.\d+)!4d(-?\d+\.\d+)', url)
+        if pb_match:
+            result.lat = float(pb_match.group(1))
+            result.lng = float(pb_match.group(2))
+            result.precision = "exact"
+            result.display_name = f"Maps Location ({result.lat}, {result.lng})"
+            return result
+        
+        # Check for ?q=lat,lng or ?ll=lat,lng directly in URL
+        q_match = re.search(r'[?&](?:q|ll|query|center)=(-?\d+\.\d+)[,%2C]+(-?\d+\.\d+)', url)
+        if q_match:
+            result.lat = float(q_match.group(1))
+            result.lng = float(q_match.group(2))
+            result.precision = "exact"
+            result.display_name = f"Maps Location ({result.lat}, {result.lng})"
+            return result
+        
+        # URL doesn't contain coords directly — it's a short link, need HTTP expansion
         expanded = _expand_shortlink(url)
         if expanded.startswith("COORDS:"):
-            # Plus Code decoded — exact coordinates available
             parts = expanded.replace("COORDS:", "").split(",", 2)
             result.lat = float(parts[0])
             result.lng = float(parts[1])
             result.precision = "exact"
             result.display_name = parts[2] if len(parts) > 2 else f"Location ({result.lat}, {result.lng})"
-            logger.info(f"Shortlink resolved via Plus Code: ({result.lat}, {result.lng}) = {result.display_name}")
+            logger.info(f"Shortlink resolved to coords: ({result.lat}, {result.lng}) = {result.display_name}")
             return result
         elif expanded.startswith("GEOCODE_TITLE:"):
             extracted_title = expanded.replace("GEOCODE_TITLE:", "")
-            # Directly geocode the extracted address — skip known-location partial matching
-            # which would incorrectly match area names (e.g., "kondapur") as low precision
             logger.info(f"Geocoding extracted address from shortlink: {extracted_title}")
             if _geocode_address(extracted_title, result):
                 return result
-            # If Nominatim fails, still set the text for downstream processing
             text = text.replace(url, extracted_title)
         else:
             text = text.replace(url, expanded)
