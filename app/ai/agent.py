@@ -637,48 +637,82 @@ async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict
     otp = str(random.randint(100000, 999999))
     logger.info(f"[{phone}] Generated OTP {otp} for mobile {mobile}")
     
-    # Try sending real SMS via Twilio
-    sms_sent = False
-    if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN and settings.TWILIO_SMS_NUMBER:
-        try:
-            from twilio.rest import Client
-            twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-            
-            # Format number to E.164 (India code)
-            e164_mobile = f"+91{mobile}"
-            
-            message = twilio_client.messages.create(
-                body=f"Your Logistics AI booked cab OTP is: {otp}. Do not share this with anyone.",
-                from_=settings.TWILIO_SMS_NUMBER,
-                to=e164_mobile
-            )
-            logger.info(f"[{phone}] SMS OTP sent to {e164_mobile}, SID: {message.sid}")
-            sms_sent = True
-        except Exception as e:
-            logger.error(f"[{phone}] Failed to send SMS OTP: {e}")
-    else:
-        logger.warning(f"[{phone}] Twilio SMS credentials missing. SMS skipped.")
-
+    # --- OTP Delivery ---
+    otp_delivered = False
+    delivery_method = None
+    
+    if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
+        from twilio.rest import Client
+        twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
+        e164_mobile = f"+91{mobile}"
+        
+        # 1) Try SMS first (only if a REAL Twilio phone number is configured, not the sandbox number)
+        sms_number = settings.TWILIO_SMS_NUMBER or ""
+        sandbox_number = "14155238886"
+        if sms_number and sandbox_number not in sms_number.replace("+", ""):
+            try:
+                message = twilio_client.messages.create(
+                    body=f"Your Logistics AI OTP is: {otp}. Do not share this with anyone.",
+                    from_=sms_number,
+                    to=e164_mobile
+                )
+                logger.info(f"[{phone}] ✅ SMS OTP sent to {e164_mobile}, SID: {message.sid}")
+                otp_delivered = True
+                delivery_method = "sms"
+            except Exception as e:
+                logger.error(f"[{phone}] ❌ SMS OTP failed: {e}")
+        
+        # 2) Fallback: Send OTP via WhatsApp API (separate message, NOT in the chat reply)
+        if not otp_delivered:
+            try:
+                wa_from = settings.TWILIO_WHATSAPP_NUMBER  # "whatsapp:+14155238886"
+                wa_to = f"whatsapp:{phone}"  # phone is already like +919951049235
+                
+                message = twilio_client.messages.create(
+                    body=f"🔐 Your Logistics AI OTP is: *{otp}*\n\nDo not share this code with anyone.",
+                    from_=wa_from,
+                    to=wa_to
+                )
+                logger.info(f"[{phone}] ✅ WhatsApp OTP sent, SID: {message.sid}")
+                otp_delivered = True
+                delivery_method = "whatsapp"
+            except Exception as e:
+                logger.error(f"[{phone}] ❌ WhatsApp OTP failed: {e}")
+    
     await state_manager.update_state(phone, "collecting_otp", {
         "customer_mobile": mobile,
         "otp": otp,
         "otp_attempts": 0,
     })
     
-    # In local dev without Twilio configured, or if the API call failed (e.g. 429 limit)
-    if not sms_sent:
+    # Build reply — NEVER show the OTP in the chat response
+    if otp_delivered and delivery_method == "sms":
         reply_msg = (
             f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-            f"⚠️ **SMS Delivery Failed / Dev Mode**\n"
-            f"Your OTP is: **{otp}**\n\n"
+            f"📲 A 6-digit OTP has been sent via **SMS** to your mobile number.\n\n"
+            "Please enter the OTP to verify and complete your booking:"
+        )
+    elif otp_delivered and delivery_method == "whatsapp":
+        reply_msg = (
+            f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
+            f"📲 A 6-digit OTP has been sent as a separate message.\n"
+            f"Check your messages above ☝️\n\n"
             "Please enter the OTP to verify and complete your booking:"
         )
     else:
-        reply_msg = (
-            f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-            f"📲 An OTP has been sent via SMS to your mobile number.\n\n"
-            "Please enter the OTP to verify and complete your booking:"
-        )
+        # Dev mode fallback — only if ALL delivery methods failed
+        logger.warning(f"[{phone}] ⚠️ All OTP delivery methods failed. Showing in chat (dev only).")
+        if settings.ENV == "dev":
+            reply_msg = (
+                f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
+                f"⚠️ **Dev Mode** — OTP: **{otp}**\n\n"
+                "Please enter the OTP to verify:"
+            )
+        else:
+            reply_msg = (
+                f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
+                f"⚠️ Could not deliver OTP. Please try again or type 'cancel' to restart.\n"
+            )
     
     return {
         "reply": reply_msg,
