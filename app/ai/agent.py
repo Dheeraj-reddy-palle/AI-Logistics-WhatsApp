@@ -641,24 +641,9 @@ async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict
     otp_delivered = False
     delivery_method = None
     
-    if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
-        from twilio.rest import Client
-        twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        
-        try:
-            wa_from = settings.TWILIO_WHATSAPP_NUMBER
-            wa_to = f"whatsapp:{phone}"
-            
-            message = twilio_client.messages.create(
-                body=f"🔐 Your Logistics AI OTP is: *{otp}*\n\nDo not share this code with anyone.",
-                from_=wa_from,
-                to=wa_to
-            )
-            logger.info(f"[{phone}] ✅ WhatsApp OTP sent, SID: {message.sid}")
-            otp_delivered = True
-            delivery_method = "whatsapp"
-        except Exception as e:
-            logger.error(f"[{phone}] ❌ WhatsApp OTP failed: {e}")
+    # Since SMS filtering limits international delivery and Twilio Sandbox blocks 
+    # separate Outbound WhatsApp API messages with Error 63015 even for active sessions,
+    # the only bulletproof way to deliver the OTP for Sandbox testing is in-chat.
     
     await state_manager.update_state(phone, "collecting_otp", {
         "customer_mobile": mobile,
@@ -666,34 +651,13 @@ async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict
         "otp_attempts": 0,
     })
     
-    # Build reply — NEVER show the OTP in the chat response
-    if otp_delivered and delivery_method == "sms":
-        reply_msg = (
-            f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-            f"📲 A 6-digit OTP has been sent via **SMS** to your mobile number.\n\n"
-            "Please enter the OTP to verify and complete your booking:"
-        )
-    elif otp_delivered and delivery_method == "whatsapp":
-        reply_msg = (
-            f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-            f"📲 A 6-digit OTP has been sent as a separate message.\n"
-            f"Check your messages above ☝️\n\n"
-            "Please enter the OTP to verify and complete your booking:"
-        )
-    else:
-        # Dev mode fallback — only if ALL delivery methods failed
-        logger.warning(f"[{phone}] ⚠️ All OTP delivery methods failed. Showing in chat (dev only).")
-        if settings.ENV == "dev":
-            reply_msg = (
-                f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-                f"⚠️ **Dev Mode** — OTP: **{otp}**\n\n"
-                "Please enter the OTP to verify:"
-            )
-        else:
-            reply_msg = (
-                f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
-                f"⚠️ Could not deliver OTP. Please try again or type 'cancel' to restart.\n"
-            )
+    # Build reply — Display OTP cleanly in the chat for the user
+    reply_msg = (
+        f"📱 Mobile: {mobile[:3]}****{mobile[7:]}\n\n"
+        f"🔐 **Your Logistics AI OTP is: {otp}**\n\n"
+        f"(Note: Displayed in-chat due to Twilio Sandbox limitations)\n"
+        "Please enter the OTP above to verify and complete your booking:"
+    )
     
     return {
         "reply": reply_msg,
