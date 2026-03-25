@@ -644,40 +644,21 @@ async def _handle_collecting_mobile(phone: str, text: str, parsed, context: dict
     if settings.TWILIO_ACCOUNT_SID and settings.TWILIO_AUTH_TOKEN:
         from twilio.rest import Client
         twilio_client = Client(settings.TWILIO_ACCOUNT_SID, settings.TWILIO_AUTH_TOKEN)
-        e164_mobile = f"+91{mobile}"
         
-        # 1) Try SMS first (only if a REAL Twilio phone number is configured, not the sandbox number)
-        sms_number = settings.TWILIO_SMS_NUMBER or ""
-        sandbox_number = "14155238886"
-        if sms_number and sandbox_number not in sms_number.replace("+", ""):
-            try:
-                message = twilio_client.messages.create(
-                    body=f"Your Logistics AI OTP is: {otp}. Do not share this with anyone.",
-                    from_=sms_number,
-                    to=e164_mobile
-                )
-                logger.info(f"[{phone}] ✅ SMS OTP sent to {e164_mobile}, SID: {message.sid}")
-                otp_delivered = True
-                delivery_method = "sms"
-            except Exception as e:
-                logger.error(f"[{phone}] ❌ SMS OTP failed: {e}")
-        
-        # 2) Fallback: Send OTP via WhatsApp API (separate message, NOT in the chat reply)
-        if not otp_delivered:
-            try:
-                wa_from = settings.TWILIO_WHATSAPP_NUMBER  # "whatsapp:+14155238886"
-                wa_to = f"whatsapp:{phone}"  # phone is already like +919951049235
-                
-                message = twilio_client.messages.create(
-                    body=f"🔐 Your Logistics AI OTP is: *{otp}*\n\nDo not share this code with anyone.",
-                    from_=wa_from,
-                    to=wa_to
-                )
-                logger.info(f"[{phone}] ✅ WhatsApp OTP sent, SID: {message.sid}")
-                otp_delivered = True
-                delivery_method = "whatsapp"
-            except Exception as e:
-                logger.error(f"[{phone}] ❌ WhatsApp OTP failed: {e}")
+        try:
+            wa_from = settings.TWILIO_WHATSAPP_NUMBER
+            wa_to = f"whatsapp:{phone}"
+            
+            message = twilio_client.messages.create(
+                body=f"🔐 Your Logistics AI OTP is: *{otp}*\n\nDo not share this code with anyone.",
+                from_=wa_from,
+                to=wa_to
+            )
+            logger.info(f"[{phone}] ✅ WhatsApp OTP sent, SID: {message.sid}")
+            otp_delivered = True
+            delivery_method = "whatsapp"
+        except Exception as e:
+            logger.error(f"[{phone}] ❌ WhatsApp OTP failed: {e}")
     
     await state_manager.update_state(phone, "collecting_otp", {
         "customer_mobile": mobile,
